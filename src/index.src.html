@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --ink:#1f2328; --muted:#6b7280; --line:#e5e7eb; --bg:#f7f8fa; --accent:#1a73e8;
+          --ok:#137333; --okbg:#e6f4ea; --warn:#8a5300; --warnbg:#fef3c7; --bad:#b3261e; --badbg:#fce8e6; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Google Sans", "Noto Sans KR", -apple-system, sans-serif; color:var(--ink);
+         background:var(--bg); font-size:14px; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 16px; padding-bottom: 96px; }
+  .drop { display: block; border: 2px dashed #c8ccd2; border-radius: 12px; background: #fff; padding: 28px 16px;
+          text-align: center; cursor: pointer; }
+  .drop.over { border-color: var(--accent); background: #f1f6fe; }
+  .drop b { display:block; font-size: 16px; margin-bottom: 6px; }
+  .drop span { color: var(--muted); }
+  .bar { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin: 14px 0 10px; }
+  .bar .stat { color: var(--muted); }
+  .bar .stat b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .bar .spacer { flex:1; }
+  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background:#fff; padding: 7px 12px; cursor:pointer; }
+  button.primary { background: var(--accent); color:#fff; border-color: var(--accent); padding: 10px 20px; font-size: 15px; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width:100%; border-collapse: collapse; background:#fff; border-radius: 12px; overflow:hidden;
+          border: 1px solid var(--line); }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align:left; vertical-align: middle; }
+  th { background:#fafbfc; font-weight:500; color: var(--muted); font-size: 12px; }
+  td.num { text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap; }
+  td.date { white-space:nowrap; font-variant-numeric: tabular-nums; }
+  tr.off td:not(:first-child) { color: #9aa0a6; }
+  tr.off select { opacity: .6; }
+  .merchant { font-weight: 500; }
+  .card { color: var(--muted); font-size: 12px; }
+  td.memo input { font: inherit; width: 100%; min-width: 110px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); }
+  select { font: inherit; padding: 5px 6px; border-radius: 6px; border:1px solid var(--line); min-width: 110px; background:#fff; }
+  select.need { border-color: var(--bad); background: var(--badbg); }
+  select.auto { border-color: #a8c7fa; }
+  .badge { display:inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .b-new { background: var(--okbg); color: var(--ok); }
+  .b-dup { background: var(--warnbg); color: var(--warn); }
+  .b-bundle { background: #eef2ff; color: #3730a3; }
+  .b-bad { background: var(--badbg); color: var(--bad); }
+  .b-wait { background: #f1f3f4; color: var(--muted); }
+  .foot { position: fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid var(--line);
+          padding: 12px 16px; display:flex; gap:12px; align-items:center; justify-content: flex-end; }
+  .foot .msg { flex:1; color: var(--muted); }
+  .foot .msg.err { color: var(--bad); }
+  .result { background:#fff; border:1px solid var(--line); border-radius:12px; padding: 20px; margin-top: 14px; line-height: 1.8; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .hidden { display:none !important; }
+  @media (max-width: 640px) {
+    .wrap { padding: 12px; padding-bottom: 110px; }
+    thead { display:none; }
+    #allMobileWrap { display:inline-flex !important; gap:6px; align-items:center; }
+    table, tbody, tr, td { display:block; width:100%; }
+    tr { border-bottom: 1px solid var(--line); padding: 8px 10px; position: relative; }
+    td { border: 0; padding: 2px 0 2px 32px; }
+    td:first-child { position:absolute; left: 10px; top: 12px; padding:0; width:auto; }
+    td.num { text-align:left; font-size: 15px; }
+    td.sel select, td.memo input { width: 100%; margin-top: 4px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <label class="drop" id="drop">
+    <b>카드사 이용내역 엑셀을 올려 주세요</b>
+    <span>.xls / .xlsx · 여기로 끌어다 놓거나 눌러서 고르기</span>
+    <input type="file" id="file" accept=".xls,.xlsx,.csv,.html" class="hidden">
+  </label>
+  <div class="hint" id="setupHint">가계부 정보를 불러오는 중…</div>
+
+  <div id="listArea" class="hidden">
+    <div class="bar">
+      <span class="stat"><b id="sCount">0</b>건 중 새로 넣기 <b id="sSel">0</b>건<span id="sUpdWrap"> · 수정 <b id="sUpd">0</b>건</span></span>
+      <span class="stat">새로 넣을 금액 <b id="sSum">0</b>원</span>
+      <label class="stat" id="allMobileWrap" style="display:none"><input type="checkbox" id="allM" checked> 전체</label>
+      <span class="spacer"></span>
+      <button id="toggleDup" type="button">이미 있는 것 빼기</button>
+    </div>
+    <table>
+      <thead><tr><th style="width:36px"><input type="checkbox" id="all" checked title="전체 선택"></th><th>이용일</th><th>가맹점</th><th style="text-align:right">금액</th><th>적요</th><th>메모</th><th>상태</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="hint">메모는 금액 칸의 메모로 들어가고, 같은 적요에 더해질 땐 기존 메모 뒤에 “+메모”로 붙어요. 같은 가맹점은 한 줄만 고치면 나머지도 따라 채워져요. 넣기 싫은 줄은 체크를 해제하세요. “이미 있음”은 시트에 같은 금액이 ±2일 안에 이미 있다는 뜻이고, 체크해 두면 새로 넣지 않고 그 항목의 적요·메모를 고쳐요. 적요를 바꾸면 그 금액이 원래 칸에서 빠져 새 적요 칸으로 옮겨가요.</div>
+  </div>
+
+  <div id="resultArea" class="result hidden"></div>
+</div>
+
+<div class="foot" id="foot">
+  <span class="msg" id="footMsg"></span>
+  <button class="primary" id="commit" disabled>완료 · 가계부에 넣기</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+/*PARSER*/
+</script>
+<script>
+var state = { categories: [], learned: {}, memos: {}, items: [] };
+var $ = function (id) { return document.getElementById(id); };
+var won = function (n) { return n.toLocaleString('ko-KR'); };
+
+function run(fn, args) {
+  return new Promise(function (resolve, reject) {
+    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)
+      .api(fn, args || []);
+  });
+}
+
+function footer(msg, isErr) {
+  $('footMsg').textContent = msg || '';
+  $('footMsg').className = 'msg' + (isErr ? ' err' : '');
+}
+
+var setupReady = run('getSetup').then(function (s) {
+  state.categories = s.categories;
+  state.learned = s.learned || {};
+  state.memos = s.memos || {};
+  $('setupHint').textContent = '“' + s.title + '” 에 넣어요 · 적요 ' + s.categories.length + '개';
+}).catch(function (e) {
+  $('setupHint').textContent = '가계부를 읽지 못했어요: ' + e.message;
+});
+
+// ---- file ----
+var drop = $('drop');
+['dragenter', 'dragover'].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); });
+});
+['dragleave', 'drop'].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); });
+});
+drop.addEventListener('drop', function (e) { if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+$('file').addEventListener('change', function (e) { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+function loadFile(file) {
+  $('resultArea').classList.add('hidden');
+  footer('파일 읽는 중…');
+  Promise.all([file.arrayBuffer(), setupReady]).then(function (res) {
+    var buf = res[0];
+    var tx = CardParse.parseRows(CardParse.readRows(XLSX, buf));
+    if (!tx.length) throw new Error('넣을 내역이 없어요');
+    state.items = tx.map(function (t, i) {
+      var s = CardParse.suggest(t.merchant, state.learned, state.categories);
+      return Object.assign(t, {
+        key: i, order: i, category: s.category, source: s.source,
+        memo: state.memos[CardParse.normalizeMerchant(t.merchant)] || shortName(t.merchant),
+        memoAuto: !state.memos[CardParse.normalizeMerchant(t.merchant)],
+        checked: true, status: 'wait'
+      });
+    });
+    render();
+    $('listArea').classList.remove('hidden');
+    footer('시트와 비교하는 중…');
+    return run('checkItems', [state.items.map(function (t) {
+      return { key: t.key, y: t.y, m: t.m, d: t.d, amount: t.amount, order: t.order };
+    })]);
+  }).then(function (checks) {
+    if (!checks) return;
+    checks.forEach(function (c) {
+      var t = state.items[c.key];
+      t.tab = c.tab;
+      if (c.tabMissing) { t.status = 'notab'; t.checked = false; }
+      else if (c.dup) {
+        t.status = 'dup'; t.dupDay = c.dupDay; t.dupCount = c.dupCount;
+        // Start from what is already in the sheet, so keeping it checked changes nothing
+        // unless the user edits 적요/메모.
+        if (c.dupCat && state.categories.indexOf(c.dupCat) >= 0) { t.category = c.dupCat; t.source = 'sheet'; }
+        if (c.dupCount === 1 && c.dupNote) { t.memo = c.dupNote; t.memoAuto = false; }
+      }
+      else if (t.bundle) { t.status = 'bundle'; }
+      else { t.status = 'new'; }
+    });
+    render();
+  }).catch(function (e) {
+    footer(e.message || String(e), true);
+  });
+}
+
+// ---- list ----
+function render() {
+  var opts = '<option value="">적요 선택</option>' + state.categories.map(function (c) {
+    return '<option>' + esc(c) + '</option>';
+  }).join('');
+  $('rows').innerHTML = state.items.map(function (t) {
+    return '<tr data-k="' + t.key + '" class="' + (t.checked ? '' : 'off') + '">' +
+      '<td><input type="checkbox" ' + (t.checked ? 'checked' : '') + (t.status === 'notab' ? ' disabled' : '') + '></td>' +
+      '<td class="date">' + t.m + '/' + t.d + '</td>' +
+      '<td><div class="merchant">' + esc(t.merchant) + '</div>' + (t.card ? '<div class="card">' + esc(t.card) + '</div>' : '') + '</td>' +
+      '<td class="num">' + won(t.amount) + '원</td>' +
+      '<td class="sel"><select class="' + (t.source ? 'auto' : '') + '">' + opts + '</select></td>' +
+      '<td class="memo"><input type="text" maxlength="40" placeholder="메모" value="' + esc(t.memo) + '"></td>' +
+      '<td>' + badge(t) + '</td></tr>';
+  }).join('');
+  Array.prototype.forEach.call($('rows').querySelectorAll('tr'), function (tr) {
+    var t = state.items[+tr.dataset.k];
+    var sel = tr.querySelector('select');
+    sel.value = t.category;
+    sel.addEventListener('change', function () { setCategory(t, sel.value); });
+    var memo = tr.querySelector('td.memo input');
+    memo.addEventListener('input', function () { t.memo = memo.value; t.memoAuto = false; });
+    memo.addEventListener('change', function () { fillSameMemo(t); });
+    tr.querySelector('input[type=checkbox]').addEventListener('change', function (e) {
+      t.checked = e.target.checked;
+      tr.classList.toggle('off', !t.checked);
+      tr.lastElementChild.innerHTML = badge(t);
+      validate();
+    });
+  });
+  validate();
+}
+
+function badge(t) {
+  switch (t.status) {
+    case 'new': return '<span class="badge b-new">새로 넣기</span>';
+    case 'dup': return t.checked
+      ? '<span class="badge b-dup" title="새로 넣지 않고 시트에 있는 항목의 적요·메모를 고쳐요">이미 있음 · 수정 (' + t.m + '/' + t.dupDay + ')</span>'
+      : '<span class="badge b-wait">이미 있음 · 그대로</span>';
+    case 'bundle': return '<span class="badge b-bundle">묶음 청구 · 확인</span>';
+    case 'notab': return '<span class="badge b-bad">' + esc(t.tab) + ' 탭 없음</span>';
+    default: return '<span class="badge b-wait">확인 중</span>';
+  }
+}
+
+function setCategory(t, cat) {
+  t.category = cat; t.source = '';
+  var key = CardParse.normalizeMerchant(t.merchant);
+  state.items.forEach(function (o) {
+    if (o !== t && !o.category && CardParse.normalizeMerchant(o.merchant) === key) {
+      o.category = cat; o.source = 'same';
+    }
+  });
+  render();
+}
+
+// Same merchant, empty memo → copy what was just typed (without re-rendering the input being edited).
+function fillSameMemo(t) {
+  var key = CardParse.normalizeMerchant(t.merchant);
+  state.items.forEach(function (o) {
+    if (o !== t && o.memoAuto && o.status !== 'dup' && CardParse.normalizeMerchant(o.merchant) === key) {
+      o.memo = t.memo;
+      var inp = document.querySelector('tr[data-k="' + o.key + '"] td.memo input');
+      if (inp) inp.value = o.memo;
+    }
+  });
+}
+
+function shortName(m) {
+  var s = CardParse.normalizeMerchant(m).replace(/\(주\)|주식회사|네이버파이낸셜|KCP|\s*-\s*/g, ' ').trim();
+  return s.split(/\s+/).pop().slice(0, 8);
+}
+
+function selected() { return state.items.filter(function (t) { return t.checked && t.status !== 'notab'; }); }
+
+function validate() {
+  var sel = selected();
+  var missing = sel.filter(function (t) { return !t.category; });
+  Array.prototype.forEach.call($('rows').querySelectorAll('tr'), function (tr) {
+    var t = state.items[+tr.dataset.k];
+    tr.querySelector('select').classList.toggle('need', t.checked && !t.category);
+  });
+  $('sCount').textContent = state.items.length;
+  var usable = state.items.filter(function (t) { return t.status !== 'notab'; });
+  $('all').checked = usable.length > 0 && usable.every(function (t) { return t.checked; });
+  $('all').indeterminate = !$('all').checked && usable.some(function (t) { return t.checked; });
+  $('allM').checked = $('all').checked;
+  $('allM').indeterminate = $('all').indeterminate;
+  var dups = state.items.filter(function (t) { return t.status === 'dup'; });
+  $('toggleDup').classList.toggle('hidden', !dups.length);
+  $('toggleDup').textContent = dups.some(function (t) { return t.checked; })
+    ? '이미 있는 것 ' + dups.length + '건 빼기' : '이미 있는 것도 수정하기';
+  var adds = sel.filter(function (t) { return t.status !== 'dup'; });
+  var upds = sel.length - adds.length;
+  $('sSel').textContent = adds.length;
+  $('sUpd').textContent = upds;
+  $('sUpdWrap').classList.toggle('hidden', !upds);
+  $('sSum').textContent = won(adds.reduce(function (s, t) { return s + t.amount; }, 0));
+  var waiting = state.items.some(function (t) { return t.status === 'wait'; });
+  $('commit').disabled = waiting || !sel.length || missing.length > 0;
+  if (waiting) footer('시트와 비교하는 중…');
+  else if (missing.length) footer('적요를 안 고른 항목이 ' + missing.length + '건 있어요', true);
+  else footer(sel.length ? sel.length + '건을 넣을 준비가 됐어요' : '넣을 항목을 골라 주세요');
+}
+
+$('toggleDup').addEventListener('click', function () {
+  var anyOn = state.items.some(function (t) { return t.status === 'dup' && t.checked; });
+  state.items.forEach(function (t) { if (t.status === 'dup') t.checked = !anyOn; });
+  render();
+});
+
+$('allM').addEventListener('change', function (e) {
+  $('all').checked = e.target.checked;
+  $('all').dispatchEvent(new Event('change'));
+});
+$('all').addEventListener('change', function (e) {
+  state.items.forEach(function (t) { if (t.status !== 'notab') t.checked = e.target.checked; });
+  render();
+});
+
+$('commit').addEventListener('click', function () {
+  var sel = selected();
+  if (!sel.length) return;
+  var adds = sel.filter(function (t) { return t.status !== 'dup'; });
+  var msg = '새로 ' + adds.length + '건 (' + won(adds.reduce(function (s, t) { return s + t.amount; }, 0)) + '원)';
+  if (sel.length > adds.length) msg += ', 이미 있는 ' + (sel.length - adds.length) + '건은 적요·메모만 수정';
+  if (!confirm(msg + '\n가계부에 반영할까요?')) return;
+  $('commit').disabled = true;
+  footer('가계부에 넣는 중…');
+  run('commitItems', [sel.map(function (t) {
+    return { key: t.key, y: t.y, m: t.m, d: t.d, amount: t.amount, category: t.category,
+             merchant: t.merchant, memo: (t.memo || '').trim(), order: t.order,
+             mode: t.status === 'dup' ? 'update' : 'add' };
+  })]).then(function (r) {
+    var lines = [];
+    lines.push('<b>다 넣었어요.</b>');
+    lines.push('새 줄 ' + r.written + '건, 같은 적요에 더한 것 ' + r.merged + '건');
+    if (r.updated || r.moved || r.same) lines.push('이미 있던 것: 메모 수정 ' + r.updated + '건, 적요 옮김 ' + r.moved + '건, 바뀐 것 없음 ' + r.same + '건');
+    if (r.full.length) lines.push('<span style="color:var(--bad)">그날 빈 줄이 없어서 못 넣은 것 ' + r.full.length + '건: ' +
+      r.full.map(function (k) { var t = state.items[k]; return t.m + '/' + t.d + ' ' + esc(t.merchant); }).join(', ') + '</span>');
+    if (r.missingTab.length) lines.push('<span style="color:var(--bad)">월 탭이 없어서 못 넣은 것 ' + r.missingTab.length + '건</span>');
+    lines.push('<button onclick="location.reload()">다른 파일 올리기</button>');
+    $('resultArea').innerHTML = lines.join('<br>');
+    $('resultArea').classList.remove('hidden');
+    $('listArea').classList.add('hidden');
+    footer('');
+  }).catch(function (e) {
+    footer('넣지 못했어요: ' + (e.message || e), true);
+    $('commit').disabled = false;
+  });
+});
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+</script>
+</body>
+</html>

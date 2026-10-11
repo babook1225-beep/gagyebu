@@ -1,0 +1,7 @@
+# local tests use real card statements and sheet data — never commit them
+test/
+node_modules/
+*.xls
+*.xlsx
+*.png
+apps-script/Loader.gs
