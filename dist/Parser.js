@@ -3,6 +3,7 @@
 var CardParse = (function () {
   var DATE_RE = /(\d{4})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})/;
   var SHORT_DATE_RE = /^(\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})$/;
+  var COMPACT_DATE_RE = /^(20\d{2})(\d{2})(\d{2})/;     // 삼성카드: 20260901
   var SKIP_RE = /소계|합계|총\s*합|청\s*구\s*할\s*인|이월약정/;
 
   function cellText(v) {
@@ -11,14 +12,17 @@ var CardParse = (function () {
 
   function toNumber(v) {
     if (typeof v === 'number') return v;
-    var s = cellText(v).replace(/[,원\s]/g, '');
+    // 삼성카드는 "(10,780)", 취소는 "(-25,630)" 처럼 괄호로 감싸서 줌
+    var s = cellText(v).replace(/[,원\s()]/g, '');
     if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
     return Number(s);
   }
 
   function parseDate(v) {
     var s = cellText(v);
-    var m = s.match(DATE_RE);
+    var m = s.match(COMPACT_DATE_RE);
+    if (m) return { y: +m[1], m: +m[2], d: +m[3] };
+    m = s.match(DATE_RE);
     if (m) return { y: +m[1], m: +m[2], d: +m[3] };
     m = s.match(SHORT_DATE_RE);
     if (m) return { y: 2000 + +m[1], m: +m[2], d: +m[3] };
@@ -33,7 +37,7 @@ var CardParse = (function () {
       for (var c = 0; c < row.length; c++) {
         var t = cellText(row[c]).replace(/\s/g, '');
         if (col.date < 0 && /^(이용일|이용일자|거래일|거래일자|승인일|승인일자|사용일|사용일자|매출일)/.test(t)) col.date = c;
-        else if (col.card < 0 && /(이용카드|카드명|카드구분|카드번호)/.test(t)) col.card = c;
+        else if (col.card < 0 && /(이용카드|카드명|카드구분|카드번호|이용구분)/.test(t)) col.card = c;
         else if (col.merchant < 0 && /(가맹점|이용처|사용처|이용하신곳)/.test(t)) col.merchant = c;
         else if (col.amount < 0 && /^(이용금액|승인금액|거래금액|사용금액|금액)/.test(t)) col.amount = c;
       }
@@ -57,7 +61,8 @@ var CardParse = (function () {
       if (amount === 0) continue;               // 연회비 0원, 할인 표시용 줄 등
       out.push({
         // "08월티머니지하철 0003건", "고속도로 0002건": a month's rides billed as one line.
-        bundle: /\d+건$/.test(merchant) && !/세/.test(merchant),
+        // 삼성카드는 "M티머니통행료 0001건 (20260917~20260917)" 처럼 기간이 뒤에 붙음
+        bundle: /\d+건(\s*\([^)]*\))?$/.test(merchant) && !/세/.test(merchant),
         y: date.y, m: date.m, d: date.d,
         card: h.col.card >= 0 ? cellText(row[h.col.card]) : '',
         merchant: merchant,
@@ -65,6 +70,31 @@ var CardParse = (function () {
       });
     }
     return out;
+  }
+
+  // A payment and its cancellation in the same file ("쿠팡 25,630" + "쿠팡 -25,630") cancel
+  // out: mark both so the screen can leave them unchecked.
+  function markCancelled(tx) {
+    tx.forEach(function (t, i) {
+      if (t.amount >= 0 || t.cancelled) return;
+      for (var j = 0; j < tx.length; j++) {
+        var o = tx[j];
+        if (j !== i && !o.cancelled && o.amount === -t.amount && o.merchant === t.merchant) {
+          o.cancelled = true; t.cancelled = true; break;
+        }
+      }
+    });
+    return tx;
+  }
+
+  /** All transactions in a card file (every sheet that has a transaction table). */
+  function parseFile(XLSX, buffer) {
+    var sheets = readSheets(XLSX, buffer);
+    var tx = [];
+    sheets.forEach(function (rows) { tx = tx.concat(parseRows(rows)); });
+    if (!sheets.length) throw new Error('카드 내역 표를 찾지 못했어요 (이용일·가맹점·금액 칸이 필요해요)');
+    tx.sort(function (a, b) { return (a.y - b.y) || (a.m - b.m) || (a.d - b.d); });
+    return markCancelled(tx);
   }
 
   // Starting rules before anything has been learned. Only used when the category exists
@@ -94,6 +124,7 @@ var CardParse = (function () {
   // but "네이버파이낸셜(주) - 항공사" vs "- 영화관" should not.
   function normalizeMerchant(s) {
     return cellText(s)
+      .replace(/\s*\([^)]*\)\s*$/, '')
       .replace(/\s*\d+건$/, '')
       .replace(/_\d+$/, '')
       .replace(/\d{1,2}월/g, '')
@@ -105,7 +136,7 @@ var CardParse = (function () {
 
   // Many Korean card sites hand out "xls" files that are really HTML (sometimes EUC-KR, and
   // with sloppy tags like "</td   >" that trip SheetJS). Decode + tidy them first.
-  function readRows(XLSX, buffer) {
+  function readSheets(XLSX, buffer) {
     var bytes = new Uint8Array(buffer);
     var head = '';
     for (var i = 0; i < Math.min(bytes.length, 2048); i++) head += String.fromCharCode(bytes[i]);
@@ -124,16 +155,22 @@ var CardParse = (function () {
     } else {
       wb = XLSX.read(bytes, { type: 'array' });
     }
-    // Use the first sheet that has a recognisable transaction table.
+    // Every sheet that has a recognisable transaction table (일시불 / 할부 탭 등).
+    var found = [];
     for (var s = 0; s < wb.SheetNames.length; s++) {
       var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]],
         { header: 1, raw: true, defval: '' });
-      if (findHeader(rows)) return rows;
+      if (findHeader(rows)) found.push(rows);
     }
-    return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+    return found;
   }
 
-  return { readRows: readRows, parseRows: parseRows, suggest: suggest, normalizeMerchant: normalizeMerchant,
+  function readRows(XLSX, buffer) {
+    var all = readSheets(XLSX, buffer);
+    return all.length ? all[0] : [];
+  }
+
+  return { parseFile: parseFile, readRows: readRows, parseRows: parseRows, suggest: suggest, normalizeMerchant: normalizeMerchant,
            parseDate: parseDate, toNumber: toNumber };
 })();
 if (typeof module !== 'undefined') module.exports = CardParse;

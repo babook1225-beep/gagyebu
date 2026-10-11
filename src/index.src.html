@@ -141,7 +141,7 @@ function loadFile(file) {
   footer('파일 읽는 중…');
   Promise.all([file.arrayBuffer(), setupReady]).then(function (res) {
     var buf = res[0];
-    var tx = CardParse.parseRows(CardParse.readRows(XLSX, buf));
+    var tx = CardParse.parseFile(XLSX, buf);
     if (!tx.length) throw new Error('넣을 내역이 없어요');
     state.items = tx.map(function (t, i) {
       var s = CardParse.suggest(t.merchant, state.learned, state.categories);
@@ -149,7 +149,7 @@ function loadFile(file) {
         key: i, order: i, category: s.category, source: s.source,
         memo: state.memos[CardParse.normalizeMerchant(t.merchant)] || shortName(t.merchant),
         memoAuto: !state.memos[CardParse.normalizeMerchant(t.merchant)],
-        checked: true, status: 'wait'
+        checked: !t.cancelled, status: 'wait'
       });
     });
     render();
@@ -171,6 +171,7 @@ function loadFile(file) {
         if (c.dupCat && state.categories.indexOf(c.dupCat) >= 0) { t.category = c.dupCat; t.source = 'sheet'; }
         if (c.dupCount === 1 && c.dupNote) { t.memo = c.dupNote; t.memoAuto = false; }
       }
+      else if (t.cancelled) { t.status = 'cancelled'; }
       else if (t.bundle) { t.status = 'bundle'; }
       else { t.status = 'new'; }
     });
@@ -219,6 +220,7 @@ function badge(t) {
     case 'dup': return t.checked
       ? '<span class="badge b-dup" title="새로 넣지 않고 시트에 있는 항목의 적요·메모를 고쳐요">이미 있음 · 수정 (' + t.m + '/' + t.dupDay + ')</span>'
       : '<span class="badge b-wait">이미 있음 · 그대로</span>';
+    case 'cancelled': return '<span class="badge b-wait">결제 후 취소됨</span>';
     case 'bundle': return '<span class="badge b-bundle">묶음 청구 · 확인</span>';
     case 'notab': return '<span class="badge b-bad">' + esc(t.tab) + ' 탭 없음</span>';
     default: return '<span class="badge b-wait">확인 중</span>';
