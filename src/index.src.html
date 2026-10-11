@@ -84,7 +84,7 @@
       <thead><tr><th style="width:36px"><input type="checkbox" id="all" checked title="전체 선택"></th><th>이용일</th><th>가맹점</th><th style="text-align:right">금액</th><th>적요</th><th>메모</th><th>상태</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div class="hint">메모는 금액 칸의 메모로 들어가고, 같은 적요에 더해질 땐 기존 메모 뒤에 “+메모”로 붙어요. 같은 가맹점은 한 줄만 고치면 나머지도 따라 채워져요. 넣기 싫은 줄은 체크를 해제하세요. “이미 있음”은 시트에 같은 금액이 ±2일 안에 이미 있다는 뜻이고, 체크해 두면 새로 넣지 않고 그 항목의 적요·메모를 고쳐요. 적요를 바꾸면 그 금액이 원래 칸에서 빠져 새 적요 칸으로 옮겨가요.</div>
+    <div class="hint">메모는 금액 칸의 메모로 들어가고, 같은 적요에 더해질 땐 기존 메모 뒤에 “+메모”로 붙어요. 적요는 한 줄만 고르면 같은 가맹점의 빈칸도 같이 채워지고, 메모는 고친 줄에만 들어가요. 넣기 싫은 줄은 체크를 해제하세요. “이미 있음”은 시트에 같은 금액이 ±2일 안에 이미 있다는 뜻이고, 체크해 두면 새로 넣지 않고 그 항목의 적요·메모를 고쳐요. 적요를 바꾸면 그 금액이 원래 칸에서 빠져 새 적요 칸으로 옮겨가요.</div>
   </div>
 
   <div id="resultArea" class="result hidden"></div>
@@ -203,7 +203,6 @@ function render() {
     sel.addEventListener('change', function () { setCategory(t, sel.value); });
     var memo = tr.querySelector('td.memo input');
     memo.addEventListener('input', function () { t.memo = memo.value; t.memoAuto = false; });
-    memo.addEventListener('change', function () { fillSameMemo(t); });
     tr.querySelector('input[type=checkbox]').addEventListener('change', function (e) {
       t.checked = e.target.checked;
       tr.classList.toggle('off', !t.checked);
@@ -236,18 +235,6 @@ function setCategory(t, cat) {
     }
   });
   render();
-}
-
-// Same merchant, empty memo → copy what was just typed (without re-rendering the input being edited).
-function fillSameMemo(t) {
-  var key = CardParse.normalizeMerchant(t.merchant);
-  state.items.forEach(function (o) {
-    if (o !== t && o.memoAuto && o.status !== 'dup' && CardParse.normalizeMerchant(o.merchant) === key) {
-      o.memo = t.memo;
-      var inp = document.querySelector('tr[data-k="' + o.key + '"] td.memo input');
-      if (inp) inp.value = o.memo;
-    }
-  });
 }
 
 function shortName(m) {

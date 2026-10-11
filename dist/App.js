@@ -129,11 +129,20 @@ function commitItems(items) {
 
     var learned = getLearned_();
     var memos = getLearned_(MEMO_KEY);
+    // 메모는 가게마다 늘 같은 경우(예: 하나로마트 → 농협)만 기억해요.
+    // 쿠팡처럼 같은 가게인데 메모가 매번 다르면 기억하지 않고, 예전 것도 지워요.
+    var memoByShop = {};
     items.forEach(function (it) {
       var k = CardParse.normalizeMerchant(it.merchant || '');
       if (!k) return;
       if (it.category) learned[k] = it.category;
-      if (it.memo) memos[k] = String(it.memo).trim();
+      var m = String(it.memo || '').trim();
+      if (!m) return;
+      if (!(k in memoByShop)) memoByShop[k] = m;
+      else if (memoByShop[k] !== m) memoByShop[k] = null;
+    });
+    Object.keys(memoByShop).forEach(function (k) {
+      if (memoByShop[k]) memos[k] = memoByShop[k]; else delete memos[k];
     });
     saveLearned_(learned);
     saveLearned_(memos, MEMO_KEY);
