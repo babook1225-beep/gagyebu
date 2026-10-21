@@ -41,6 +41,8 @@
   .b-new { background: var(--okbg); color: var(--ok); }
   .b-dup { background: var(--warnbg); color: var(--warn); }
   .b-bundle { background: #eef2ff; color: #3730a3; }
+  .b-skip { background: #eef2ff; color: #3730a3; }
+  .inc { color: var(--ok); }
   .b-bad { background: var(--badbg); color: var(--bad); }
   .b-wait { background: #f1f3f4; color: var(--muted); }
   .foot { position: fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid var(--line);
@@ -66,7 +68,7 @@
 <body>
 <div class="wrap">
   <label class="drop" id="drop">
-    <b>카드사 이용내역 엑셀을 올려 주세요</b>
+    <b>카드 이용내역이나 은행 거래내역 엑셀을 올려 주세요</b>
     <span>.xls / .xlsx · 여기로 끌어다 놓거나 눌러서 고르기</span>
     <input type="file" id="file" accept=".xls,.xlsx,.csv,.html" class="hidden">
   </label>
@@ -75,16 +77,16 @@
   <div id="listArea" class="hidden">
     <div class="bar">
       <span class="stat"><b id="sCount">0</b>건 중 새로 넣기 <b id="sSel">0</b>건<span id="sUpdWrap"> · 수정 <b id="sUpd">0</b>건</span></span>
-      <span class="stat">새로 넣을 금액 <b id="sSum">0</b>원</span>
+      <span class="stat">새로 넣을 지출 <b id="sSum">0</b>원<span id="sIncWrap"> · 수입 <b id="sInc">0</b>원</span></span>
       <label class="stat" id="allMobileWrap" style="display:none"><input type="checkbox" id="allM" checked> 전체</label>
       <span class="spacer"></span>
       <button id="toggleDup" type="button">이미 있는 것 빼기</button>
     </div>
     <table>
-      <thead><tr><th style="width:36px"><input type="checkbox" id="all" checked title="전체 선택"></th><th>이용일</th><th>가맹점</th><th style="text-align:right">금액</th><th>적요</th><th>메모</th><th>상태</th></tr></thead>
+      <thead><tr><th style="width:36px"><input type="checkbox" id="all" checked title="전체 선택"></th><th>날짜</th><th>사용처 · 받는분</th><th style="text-align:right">금액</th><th>적요</th><th>메모</th><th>상태</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div class="hint">메모는 금액 칸의 메모로 들어가고, 같은 적요에 더해질 땐 기존 메모 뒤에 “+메모”로 붙어요. 적요는 한 줄만 고르면 같은 가맹점의 빈칸도 같이 채워지고, 메모는 고친 줄에만 들어가요. 넣기 싫은 줄은 체크를 해제하세요. “이미 있음”은 시트에 같은 금액이 ±2일 안에 이미 있다는 뜻이고, 체크해 두면 새로 넣지 않고 그 항목의 적요·메모를 고쳐요. 적요를 바꾸면 그 금액이 원래 칸에서 빠져 새 적요 칸으로 옮겨가요.</div>
+    <div class="hint">메모는 금액 칸의 메모로 들어가고, 같은 적요에 더해질 땐 기존 메모 뒤에 “+메모”로 붙어요. 적요는 한 줄만 고르면 같은 가맹점의 빈칸도 같이 채워지고, 메모는 고친 줄에만 들어가요. 넣기 싫은 줄은 체크를 해제하세요. 은행 내역은 카드대금·저축·대출 상환·사람에게 보낸 이체와 입금을 기본으로 빼 두고, 체크를 해제한 받는분은 다음에도 빼 둬요. 입금은 수입 칸(2–3행)에 들어가요. “이미 있음”은 시트에 같은 금액이 ±2일 안에 이미 있다는 뜻이고, 체크해 두면 새로 넣지 않고 그 항목의 적요·메모를 고쳐요. 적요를 바꾸면 그 금액이 원래 칸에서 빠져 새 적요 칸으로 옮겨가요.</div>
   </div>
 
   <div id="resultArea" class="result hidden"></div>
@@ -100,7 +102,8 @@
 /*PARSER*/
 </script>
 <script>
-var state = { categories: [], learned: {}, memos: {}, items: [] };
+var state = { categories: [], incomeCategories: [], learned: {}, memos: {}, skip: {}, items: [] };
+function catsFor(t) { return t.income ? state.incomeCategories : state.categories; }
 var $ = function (id) { return document.getElementById(id); };
 var won = function (n) { return n.toLocaleString('ko-KR'); };
 
@@ -120,6 +123,8 @@ var setupReady = run('getSetup').then(function (s) {
   state.categories = s.categories;
   state.learned = s.learned || {};
   state.memos = s.memos || {};
+  state.incomeCategories = s.incomeCategories || [];
+  state.skip = s.skip || {};
   $('setupHint').textContent = '“' + s.title + '” 에 넣어요 · 적요 ' + s.categories.length + '개';
 }).catch(function (e) {
   $('setupHint').textContent = '가계부를 읽지 못했어요: ' + e.message;
@@ -144,19 +149,23 @@ function loadFile(file) {
     var tx = CardParse.parseFile(XLSX, buf);
     if (!tx.length) throw new Error('넣을 내역이 없어요');
     state.items = tx.map(function (t, i) {
-      var s = CardParse.suggest(t.merchant, state.learned, state.categories);
+      var s = CardParse.suggest(t.merchant, state.learned, catsFor(t));
+      var key = CardParse.normalizeMerchant(t.merchant);
+      // 은행: 카드대금·저축·대출·이체·입금, 지난번에 뺀 받는분은 기본으로 빼 둠
+      if (t.bank && !t.flag && state.skip[key]) t.flag = 'skip';
+      var off = t.bank && (!!t.flag || t.income);
       return Object.assign(t, {
         key: i, order: i, category: s.category, source: s.source,
-        memo: state.memos[CardParse.normalizeMerchant(t.merchant)] || shortName(t.merchant),
+        memo: state.memos[CardParse.normalizeMerchant(t.merchant)] || (t.flag === 'loan' ? '대출' : shortName(t.merchant)),
         memoAuto: !state.memos[CardParse.normalizeMerchant(t.merchant)],
-        checked: !t.cancelled, status: 'wait'
+        checked: !t.cancelled && !off, status: 'wait'
       });
     });
     render();
     $('listArea').classList.remove('hidden');
     footer('시트와 비교하는 중…');
     return run('checkItems', [state.items.map(function (t) {
-      return { key: t.key, y: t.y, m: t.m, d: t.d, amount: t.amount, order: t.order };
+      return { key: t.key, y: t.y, m: t.m, d: t.d, amount: t.amount, order: t.order, income: !!t.income };
     })]);
   }).then(function (checks) {
     if (!checks) return;
@@ -166,13 +175,15 @@ function loadFile(file) {
       if (c.tabMissing) { t.status = 'notab'; t.checked = false; }
       else if (c.dup) {
         t.status = 'dup'; t.dupDay = c.dupDay; t.dupCount = c.dupCount;
+        if (t.bank && t.flag && t.flag !== 'skip') t.checked = true;   // 이미 적어 둔 거면 그대로 수정 대상
         // Start from what is already in the sheet, so keeping it checked changes nothing
         // unless the user edits 적요/메모.
-        if (c.dupCat && state.categories.indexOf(c.dupCat) >= 0) { t.category = c.dupCat; t.source = 'sheet'; }
+        if (c.dupCat && catsFor(t).indexOf(c.dupCat) >= 0) { t.category = c.dupCat; t.source = 'sheet'; }
         if (c.dupCount === 1 && c.dupNote) { t.memo = c.dupNote; t.memoAuto = false; }
       }
       else if (t.cancelled) { t.status = 'cancelled'; }
       else if (t.bundle) { t.status = 'bundle'; }
+      else if (t.flag) { t.status = 'flag'; }
       else { t.status = 'new'; }
     });
     render();
@@ -183,15 +194,19 @@ function loadFile(file) {
 
 // ---- list ----
 function render() {
-  var opts = '<option value="">적요 선택</option>' + state.categories.map(function (c) {
-    return '<option>' + esc(c) + '</option>';
-  }).join('');
+  var optsFor = function (list) {
+    return '<option value="">적요 선택</option>' + list.map(function (c) {
+      return '<option>' + esc(c) + '</option>';
+    }).join('');
+  };
+  var expOpts = optsFor(state.categories), incOpts = optsFor(state.incomeCategories);
   $('rows').innerHTML = state.items.map(function (t) {
+    var opts = t.income ? incOpts : expOpts;
     return '<tr data-k="' + t.key + '" class="' + (t.checked ? '' : 'off') + '">' +
       '<td><input type="checkbox" ' + (t.checked ? 'checked' : '') + (t.status === 'notab' ? ' disabled' : '') + '></td>' +
       '<td class="date">' + t.m + '/' + t.d + '</td>' +
       '<td><div class="merchant">' + esc(t.merchant) + '</div>' + (t.card ? '<div class="card">' + esc(t.card) + '</div>' : '') + '</td>' +
-      '<td class="num">' + won(t.amount) + '원</td>' +
+      '<td class="num' + (t.income ? ' inc' : '') + '">' + (t.income ? '+' : '') + won(t.amount) + '원</td>' +
       '<td class="sel"><select class="' + (t.source ? 'auto' : '') + '">' + opts + '</select></td>' +
       '<td class="memo"><input type="text" maxlength="40" placeholder="메모" value="' + esc(t.memo) + '"></td>' +
       '<td>' + badge(t) + '</td></tr>';
@@ -215,7 +230,11 @@ function render() {
 
 function badge(t) {
   switch (t.status) {
-    case 'new': return '<span class="badge b-new">새로 넣기</span>';
+    case 'new': return t.income && !t.checked ? '<span class="badge b-wait">수입 · 뺌</span>'
+      : '<span class="badge b-new">' + (t.income ? '수입 · ' : '') + '새로 넣기</span>';
+    case 'flag': return '<span class="badge b-skip">' + ({
+        cardbill: '카드대금', saving: '저축·적금', loan: '대출 상환', transfer: (t.income ? '받은 이체' : '보낸 이체'), skip: '지난번에 뺌'
+      }[t.flag] || '확인') + (t.checked ? ' · 넣기' : ' · 뺌') + '</span>';
     case 'dup': return t.checked
       ? '<span class="badge b-dup" title="새로 넣지 않고 시트에 있는 항목의 적요·메모를 고쳐요">이미 있음 · 수정 (' + t.m + '/' + t.dupDay + ')</span>'
       : '<span class="badge b-wait">이미 있음 · 그대로</span>';
@@ -230,7 +249,7 @@ function setCategory(t, cat) {
   t.category = cat; t.source = '';
   var key = CardParse.normalizeMerchant(t.merchant);
   state.items.forEach(function (o) {
-    if (o !== t && !o.category && CardParse.normalizeMerchant(o.merchant) === key) {
+    if (o !== t && !o.category && !!o.income === !!t.income && CardParse.normalizeMerchant(o.merchant) === key) {
       o.category = cat; o.source = 'same';
     }
   });
@@ -266,7 +285,11 @@ function validate() {
   $('sSel').textContent = adds.length;
   $('sUpd').textContent = upds;
   $('sUpdWrap').classList.toggle('hidden', !upds);
-  $('sSum').textContent = won(adds.reduce(function (s, t) { return s + t.amount; }, 0));
+  var sumOf = function (list) { return list.reduce(function (s, t) { return s + t.amount; }, 0); };
+  var inc = sumOf(adds.filter(function (t) { return t.income; }));
+  $('sSum').textContent = won(sumOf(adds.filter(function (t) { return !t.income; })));
+  $('sInc').textContent = won(inc);
+  $('sIncWrap').classList.toggle('hidden', !inc);
   var waiting = state.items.some(function (t) { return t.status === 'wait'; });
   $('commit').disabled = waiting || !sel.length || missing.length > 0;
   if (waiting) footer('시트와 비교하는 중…');
@@ -293,7 +316,9 @@ $('commit').addEventListener('click', function () {
   var sel = selected();
   if (!sel.length) return;
   var adds = sel.filter(function (t) { return t.status !== 'dup'; });
-  var msg = '새로 ' + adds.length + '건 (' + won(adds.reduce(function (s, t) { return s + t.amount; }, 0)) + '원)';
+  var exp = adds.filter(function (t) { return !t.income; }), incs = adds.filter(function (t) { return t.income; });
+  var sumOf = function (list) { return list.reduce(function (s, t) { return s + t.amount; }, 0); };
+  var msg = '새로 ' + adds.length + '건 (지출 ' + won(sumOf(exp)) + '원' + (incs.length ? ', 수입 ' + won(sumOf(incs)) + '원' : '') + ')';
   if (sel.length > adds.length) msg += ', 이미 있는 ' + (sel.length - adds.length) + '건은 적요·메모만 수정';
   if (!confirm(msg + '\n가계부에 반영할까요?')) return;
   $('commit').disabled = true;
@@ -301,8 +326,11 @@ $('commit').addEventListener('click', function () {
   run('commitItems', [sel.map(function (t) {
     return { key: t.key, y: t.y, m: t.m, d: t.d, amount: t.amount, category: t.category,
              merchant: t.merchant, memo: (t.memo || '').trim(), order: t.order,
+             income: !!t.income, bank: !!t.bank,
              mode: t.status === 'dup' ? 'update' : 'add' };
-  })]).then(function (r) {
+  }), state.items.filter(function (t) {
+    return t.bank && !t.checked && t.status !== 'notab' && t.status !== 'dup';
+  }).map(function (t) { return t.merchant; })]).then(function (r) {
     var lines = [];
     lines.push('<b>다 넣었어요.</b>');
     lines.push('새 줄 ' + r.written + '건, 같은 적요에 더한 것 ' + r.merged + '건');

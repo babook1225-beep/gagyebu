@@ -7,6 +7,9 @@ var Layout = {
   FIRST_COL: 6,        // F
   EXP_FIRST_ROW: 5,
   EXP_LAST_ROW: 14,
+  INC_FIRST_ROW: 2,    // 수입 2–3행 (4행은 합)
+  INC_LAST_ROW: 3,
+  INC_CAT_RANGE: 'BS2:BS13',
   LAST_COL: 6 + 31 * 2 - 1,   // BO
   CAT_RANGE: 'BS14:BS28',
   tabName: function (y, m) { return y + '.' + (m < 10 ? '0' : '') + m; },
@@ -105,7 +108,7 @@ var Plan = (function () {
       }
       if (target < 0) { results.push({ idx: idx, status: 'full' }); return; }
 
-      var row = Layout.EXP_FIRST_ROW + target;
+      var row = (grid.firstRow || Layout.EXP_FIRST_ROW) + target;
       var memo = String(it.memo || '').trim();
       if (memo) {
         if (!grid.notes) grid.notes = grid.cats.map(function (r) { return r.map(function () { return ''; }); });
@@ -164,7 +167,7 @@ var Plan = (function () {
       if (!p.dup) { notFound.push(it); results.push({ idx: idx, status: 'notfound' }); return; }
       var a = Layout.amtCol(p.dupDay) - Layout.FIRST_COL;
       var c = a - 1;
-      var row = Layout.EXP_FIRST_ROW + p.dupRow;
+      var row = (grid.firstRow || Layout.EXP_FIRST_ROW) + p.dupRow;
       var memo = String(it.memo || '').trim();
       if (!it.category || it.category === p.dupCat) {
         if (memo && p.dupCount === 1 && memo !== p.dupNote) {

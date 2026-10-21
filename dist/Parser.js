@@ -33,15 +33,20 @@ var CardParse = (function () {
   function findHeader(rows) {
     for (var r = 0; r < Math.min(rows.length, 40); r++) {
       var row = rows[r] || [];
-      var col = { date: -1, card: -1, merchant: -1, amount: -1 };
+      var col = { date: -1, card: -1, merchant: -1, amount: -1, out: -1, inn: -1, memo: -1 };
       for (var c = 0; c < row.length; c++) {
         var t = cellText(row[c]).replace(/\s/g, '');
-        if (col.date < 0 && /^(이용일|이용일자|거래일|거래일자|승인일|승인일자|사용일|사용일자|매출일)/.test(t)) col.date = c;
-        else if (col.card < 0 && /(이용카드|카드명|카드구분|카드번호|이용구분)/.test(t)) col.card = c;
-        else if (col.merchant < 0 && /(가맹점|이용처|사용처|이용하신곳)/.test(t)) col.merchant = c;
+        if (col.date < 0 && /^(이용일|이용일자|거래일|거래일자|거래일시|승인일|승인일자|사용일|사용일자|매출일)/.test(t)) col.date = c;
+        else if (col.card < 0 && /(이용카드|카드명|카드구분|카드번호|이용구분|^적요$|^거래구분$)/.test(t)) col.card = c;
+        else if (col.merchant < 0 && /(가맹점|이용처|사용처|이용하신곳|보낸분|받는분|기재내용|^내용$|거래내용)/.test(t)) col.merchant = c;
+        else if (col.out < 0 && /^(출금액|출금금액|찾으신금액|출금)$/.test(t)) col.out = c;
+        else if (col.inn < 0 && /^(입금액|입금금액|맡기신금액|입금)$/.test(t)) col.inn = c;
+        else if (col.memo < 0 && /^(송금메모|메모)$/.test(t)) col.memo = c;
         else if (col.amount < 0 && /^(이용금액|승인금액|거래금액|사용금액|금액)/.test(t)) col.amount = c;
       }
-      if (col.date >= 0 && col.merchant >= 0 && col.amount >= 0) return { row: r, col: col };
+      // 은행 거래내역: 금액이 출금액/입금액 두 칸으로 나뉨
+      col.bank = col.out >= 0 && col.inn >= 0;
+      if (col.date >= 0 && col.merchant >= 0 && (col.amount >= 0 || col.bank)) return { row: r, col: col };
     }
     return null;
   }
@@ -50,6 +55,7 @@ var CardParse = (function () {
   function parseRows(rows) {
     var h = findHeader(rows);
     if (!h) throw new Error('카드 내역 표를 찾지 못했어요 (이용일·가맹점·금액 칸이 필요해요)');
+    if (h.col.bank) return parseBankRows(rows, h);
     var out = [];
     for (var r = h.row + 1; r < rows.length; r++) {
       var row = rows[r] || [];
@@ -67,6 +73,47 @@ var CardParse = (function () {
         card: h.col.card >= 0 ? cellText(row[h.col.card]) : '',
         merchant: merchant,
         amount: amount
+      });
+    }
+    return out;
+  }
+
+  // 카드대금, 내 계좌·저축으로 옮긴 돈, 대출 상환은 지출이 아니거나 이미 카드내역으로 들어가니
+  // 기본으로 빼 둠 (체크하면 넣을 수 있음).
+  var CARD_BILL_RE = /카드|국민카드|비씨|BC|KB국민|삼성카드|현대카드|신한카드|롯데카드|하나카드|우리카드|NH카드/i;
+  var SAVING_RE = /청약|적금|저축|도약|펀드|증권|투자|연금저축|IRP|ISA|MMF/i;
+  var LOAN_RE = /기일출금|대출|원리금|이자출금/;
+  var PERSON_RE = /^[가-힣]{2,4}$/;
+  var TRANSFER_KIND_RE = /이체|출금|송금|입금|자동/;
+
+  function bankFlag(kind, name, memo, dir) {
+    if (dir === 'out' && CARD_BILL_RE.test(name) && !/카드깡/.test(name)) return 'cardbill';
+    if (LOAN_RE.test(kind) || LOAN_RE.test(name) || /금리/.test(memo)) return 'loan';
+    if (SAVING_RE.test(name)) return 'saving';
+    if (PERSON_RE.test(name) && !/모임|회$|계$/.test(name) && TRANSFER_KIND_RE.test(kind)) return 'transfer';
+    return '';
+  }
+
+  function parseBankRows(rows, h) {
+    var out = [];
+    for (var r = h.row + 1; r < rows.length; r++) {
+      var row = rows[r] || [];
+      var date = parseDate(row[h.col.date]);
+      if (!date) continue;
+      var name = cellText(row[h.col.merchant]);
+      var kind = h.col.card >= 0 ? cellText(row[h.col.card]) : '';
+      var memo = h.col.memo >= 0 ? cellText(row[h.col.memo]) : '';
+      var o = toNumber(row[h.col.out]) || 0, i = toNumber(row[h.col.inn]) || 0;
+      if (!o && !i) continue;
+      var dir = o ? 'out' : 'in';
+      if (!name) name = kind || memo;
+      if (!name || SKIP_RE.test(name)) continue;
+      out.push({
+        bank: true, income: dir === 'in', flag: bankFlag(kind, name, memo, dir),
+        y: date.y, m: date.m, d: date.d,
+        card: kind + (memo && memo !== name ? ' · ' + memo : ''),
+        merchant: name,
+        amount: o || i
       });
     }
     return out;
@@ -92,9 +139,10 @@ var CardParse = (function () {
     var sheets = readSheets(XLSX, buffer);
     var tx = [];
     sheets.forEach(function (rows) { tx = tx.concat(parseRows(rows)); });
-    if (!sheets.length) throw new Error('카드 내역 표를 찾지 못했어요 (이용일·가맹점·금액 칸이 필요해요)');
+    if (!sheets.length) throw new Error('내역 표를 찾지 못했어요 (날짜·가맹점(받는분)·금액 칸이 필요해요)');
     tx.sort(function (a, b) { return (a.y - b.y) || (a.m - b.m) || (a.d - b.d); });
-    return markCancelled(tx);
+    return markCancelled(tx.filter(function (t) { return !t.bank; })).concat(tx.filter(function (t) { return t.bank; }))
+      .sort(function (a, b) { return (a.y - b.y) || (a.m - b.m) || (a.d - b.d); });
   }
 
   // Starting rules before anything has been learned. Only used when the category exists
@@ -104,7 +152,13 @@ var CardParse = (function () {
     [/의원|병원|약국|의학과|치과|한의원|상담센터|클리닉|메디/, '병원비'],
     [/커피|카페|스타벅스|메가엠지씨|컴포즈|할리스|이디야|투썸|버거|맥도날드|롯데리아|치킨|피자|식당|마트|하나로|씨유|CU|GS25|세븐일레븐|이마트24|편의점|우아한형제들|배달|요기요|쿠팡이츠|아이스크림|베이커리|빵/i, '식비'],
     [/SKT|KT|LG\s*U|통신|지방세|세금|국세|관리비|가스|전기|수도|헤어|미용/i, '생활비'],
-    [/메가박스|CGV|롯데시네마/i, '데이트']
+    [/메가박스|CGV|롯데시네마/i, '데이트'],
+    [/손해|손보|화재|생명|라이나|AIA|메트라이프|^KB손|^DB손|^미래\d|보험/i, '생활비'],
+    [/모임|계비|회비/, '계비'],
+    // 입금
+    [/급여|월급|상여/, '월급'],
+    [/이자|결산/, '이자'],
+    [/지원금|환급|장려금/, '지원금']
   ];
 
   function suggest(merchant, learned, categories) {
@@ -127,6 +181,7 @@ var CardParse = (function () {
       .replace(/\s*\([^)]*\)\s*$/, '')
       .replace(/\s*\d+건$/, '')
       .replace(/_\d+$/, '')
+      .replace(/([^\d\s])\d{4,}$/, '$1')        // 은행 CMS: "보험사07509" → 매달 바뀌는 번호 떼기
       .replace(/\d{1,2}월/g, '')
       .replace(/[\s-]*\*\*[\d*\-]*$/, '')
       .replace(/[\s\-_]+$/, '')

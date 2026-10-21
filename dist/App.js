@@ -16,6 +16,7 @@
 
 var LEARNED_KEY = 'cardImport.learned';
 var MEMO_KEY = 'cardImport.memo';
+var SKIP_KEY = 'cardImport.bankSkip';   // 은행 내역에서 늘 빼는 받는분 (내 계좌 이체 등)
 
 function ss_() { return Host.ss(); }
 
@@ -29,21 +30,23 @@ function saveLearned_(map, key) {
 }
 
 /** 가장 최근 월 탭의 적요 목록 (BS14:BS28). */
-function getCategories_(ss) {
+function getCategories_(ss, range) {
   var tabs = ss.getSheets().map(function (s) { return s.getName(); })
     .filter(function (n) { return /^\d{4}\.\d{2}$/.test(n); }).sort();
   if (!tabs.length) return [];
   var sh = ss.getSheetByName(tabs[tabs.length - 1]);
-  return sh.getRange(Layout.CAT_RANGE).getDisplayValues()
+  return sh.getRange(range || Layout.CAT_RANGE).getDisplayValues()
     .map(function (r) { return String(r[0]).trim(); })
     .filter(function (v) { return v; });
 }
 
-function readGrid_(sh) {
-  var nRows = Layout.EXP_LAST_ROW - Layout.EXP_FIRST_ROW + 1;
+function readGrid_(sh, income) {
+  var first = income ? Layout.INC_FIRST_ROW : Layout.EXP_FIRST_ROW;
+  var last = income ? Layout.INC_LAST_ROW : Layout.EXP_LAST_ROW;
   var nCols = Layout.LAST_COL - Layout.FIRST_COL + 1;
-  var range = sh.getRange(Layout.EXP_FIRST_ROW, Layout.FIRST_COL, nRows, nCols);
+  var range = sh.getRange(first, Layout.FIRST_COL, last - first + 1, nCols);
   return {
+    firstRow: first,
     cats: range.getDisplayValues(),
     vals: range.getValues(),
     forms: range.getFormulas(),
@@ -54,7 +57,8 @@ function readGrid_(sh) {
 /** 화면이 처음 열릴 때: 적요 목록 + 기억해 둔 가맹점 적요. */
 function getSetup() {
   var ss = ss_();
-  return { categories: getCategories_(ss), learned: getLearned_(), memos: getLearned_(MEMO_KEY), title: ss.getName() };
+  return { categories: getCategories_(ss), incomeCategories: getCategories_(ss, Layout.INC_CAT_RANGE),
+           learned: getLearned_(), memos: getLearned_(MEMO_KEY), skip: getLearned_(SKIP_KEY), title: ss.getName() };
 }
 
 /**
@@ -72,7 +76,10 @@ function checkItems(items) {
       list.forEach(function (it) { out.push({ key: it.key, tab: tab, tabMissing: true, dup: false }); });
       return;
     }
-    Plan.markDuplicates(readGrid_(sh), list);
+    [false, true].forEach(function (inc) {
+      var part = list.filter(function (it) { return !!it.income === inc; });
+      if (part.length) Plan.markDuplicates(readGrid_(sh, inc), part);
+    });
     list.forEach(function (it) {
       out.push({ key: it.key, tab: tab, tabMissing: false, dup: it.dup, dupDay: it.dupDay,
                  dupCat: it.dupCat || '', dupNote: it.dupNote || '', dupCount: it.dupCount || 0 });
@@ -85,7 +92,7 @@ function checkItems(items) {
  * 완료: 고른 항목을 시트에 넣고 가맹점 적요를 기억.
  * items: [{ key, y, m, d, amount, category, merchant, memo, mode: 'add'|'update' }]
  */
-function commitItems(items) {
+function commitItems(items, skipped) {
   var lock = LockService.getDocumentLock();
   lock.waitLock(20000);
   try {
@@ -99,7 +106,20 @@ function commitItems(items) {
         list.forEach(function (it) { summary.missingTab.push(it.key); });
         return;
       }
-      var grid = readGrid_(sh);
+      [false, true].forEach(function (inc) {
+        var part = list.filter(function (it) { return !!it.income === inc; });
+        if (part.length) commitPart_(sh, readGrid_(sh, inc), part, summary);
+      });
+    });
+    SpreadsheetApp.flush();
+    rememberChoices_(items, skipped || []);
+    return summary;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function commitPart_(sh, grid, list, summary) {
       // "이미 있음" kept checked → fix the existing entry instead of adding it again.
       var upd = Plan.planUpdates(grid, list.filter(function (it) { return it.mode === 'update'; }));
       upd.results.forEach(function (r) {
@@ -124,9 +144,9 @@ function commitItems(items) {
         else if (r.status === 'merged') summary.merged++;
         else summary.written++;
       });
-    });
-    SpreadsheetApp.flush();
+}
 
+function rememberChoices_(items, skipped) {
     var learned = getLearned_();
     var memos = getLearned_(MEMO_KEY);
     // 메모는 가게마다 늘 같은 경우(예: 하나로마트 → 농협)만 기억해요.
@@ -146,10 +166,11 @@ function commitItems(items) {
     });
     saveLearned_(learned);
     saveLearned_(memos, MEMO_KEY);
-    return summary;
-  } finally {
-    lock.releaseLock();
-  }
+    // 은행 내역: 체크 해제하고 넣은 받는분은 다음에도 빼 두고, 넣은 받는분은 목록에서 지움
+    var skip = getLearned_(SKIP_KEY);
+    skipped.forEach(function (m) { var k = CardParse.normalizeMerchant(m); if (k) skip[k] = 1; });
+    items.forEach(function (it) { if (it.bank) delete skip[CardParse.normalizeMerchant(it.merchant || '')]; });
+    saveLearned_(skip, SKIP_KEY);
 }
 
 function groupByTab_(items) {
