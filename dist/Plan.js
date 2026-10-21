@@ -14,7 +14,18 @@ var Layout = {
   CAT_RANGE: 'BS14:BS28',
   tabName: function (y, m) { return y + '.' + (m < 10 ? '0' : '') + m; },
   catCol: function (d) { return 6 + (d - 1) * 2; },
-  amtCol: function (d) { return 7 + (d - 1) * 2; }
+  amtCol: function (d) { return 7 + (d - 1) * 2; },
+  // 어디서 온 내역인지 칸 배경색으로 표시. 여러 곳에서 온 금액이 한 칸에 더해지면 MIXED.
+  COLORS: {
+    '현대카드': '#dbe8fd', '삼성카드': '#d9f2e1', '국민은행': '#fdf0c4',
+    '국민카드': '#fde2cc', '신한카드': '#e3e0fb', '롯데카드': '#fbdde3', '하나카드': '#d4f0ee',
+    '우리카드': '#d6ecfa', '농협카드': '#e9f3d2', 'BC카드': '#f8dcdc',
+    '신한은행': '#e3e0fb', '우리은행': '#d6ecfa', '하나은행': '#d4f0ee', '농협': '#e9f3d2',
+    '카카오뱅크': '#fff6b3', '토스뱅크': '#dde6f7'
+  },
+  MIXED: '#ececec',
+  WHITE: '#ffffff',
+  colorOf: function (origin) { return (origin && Layout.COLORS[origin]) || ''; }
 };
 
 var Plan = (function () {
@@ -84,6 +95,23 @@ var Plan = (function () {
     return items;
   }
 
+  function isWhite(c) { return !c || /^#?f{6}$/i.test(String(c)); }
+
+  // 칸 두 개(적요·금액)의 배경을 정함: 빈 칸이면 출처 색, 같은 색이면 그대로, 다르면 섞임 색.
+  function paint(grid, writes, rowIdx, c, row, d, color, fresh) {
+    if (!color || !grid.bgs) return;
+    var a = c + 1;
+    var cur = grid.bgs[rowIdx][a];
+    var next;
+    if (fresh) next = color;
+    else if (!isWhite(cur) && String(cur).toLowerCase() === color.toLowerCase()) next = cur;
+    else next = Layout.MIXED;
+    if (String(next).toLowerCase() === String(cur || '').toLowerCase()) return;
+    grid.bgs[rowIdx][a] = next; grid.bgs[rowIdx][c] = next;
+    writes.push({ row: row, col: Layout.catCol(d), bg: next });
+    writes.push({ row: row, col: Layout.amtCol(d), bg: next });
+  }
+
   /**
    * Returns { writes: [{row, col, value}], results: [{idx, status, row}] }.
    * status: 'merged' (added to an existing same-category cell), 'new' (empty slot), 'full'.
@@ -118,6 +146,9 @@ var Plan = (function () {
         grid.notes[target][a] = note;
         writes.push({ row: row, col: Layout.amtCol(it.d), note: note });
       }
+      var color = Layout.colorOf(it.origin);
+      // 새 칸이면 출처 색. 기존 칸에 더할 때: 손으로 적은 흰 칸이나 다른 출처면 섞임 색.
+      paint(grid, writes, target, c, row, it.d, color, status === 'new' ? true : false);
       if (status === 'new') {
         writes.push({ row: row, col: Layout.catCol(it.d), value: it.category });
         writes.push({ row: row, col: Layout.amtCol(it.d), value: it.amount });
@@ -134,7 +165,7 @@ var Plan = (function () {
     });
     // Several items can land in the same cell; only the final value needs writing.
     var last = {};
-    var kind = function (w) { return w.row + ':' + w.col + (('note' in w) ? ':n' : ':v'); };
+    var kind = function (w) { return w.row + ':' + w.col + (('note' in w) ? ':n' : ('bg' in w) ? ':b' : ':v'); };
     writes.forEach(function (w, i) { last[kind(w)] = i; });
     writes = writes.filter(function (w, i) { return last[kind(w)] === i; });
     return { writes: writes, results: results };
@@ -170,6 +201,8 @@ var Plan = (function () {
       var row = (grid.firstRow || Layout.EXP_FIRST_ROW) + p.dupRow;
       var memo = String(it.memo || '').trim();
       if (!it.category || it.category === p.dupCat) {
+        // 손으로 적어 둔 걸 카드·은행 내역으로 확인했으면 그 칸에도 출처 색 (한 건짜리 칸만)
+        if (p.dupCount === 1) paint(grid, writes, p.dupRow, c, row, p.dupDay, Layout.colorOf(it.origin), true);
         if (memo && p.dupCount === 1 && memo !== p.dupNote) {
           if (grid.notes) grid.notes[p.dupRow][a] = memo;
           writes.push({ row: row, col: Layout.amtCol(p.dupDay), note: memo });
@@ -190,6 +223,11 @@ var Plan = (function () {
         writes.push({ row: row, col: Layout.catCol(p.dupDay), value: '' });
         if (grid.notes) grid.notes[p.dupRow][a] = '';
         writes.push({ row: row, col: Layout.amtCol(p.dupDay), note: '' });
+        if (grid.bgs && !isWhite(grid.bgs[p.dupRow][a])) {
+          grid.bgs[p.dupRow][a] = grid.bgs[p.dupRow][c] = Layout.WHITE;
+          writes.push({ row: row, col: Layout.catCol(p.dupDay), bg: Layout.WHITE });
+          writes.push({ row: row, col: Layout.amtCol(p.dupDay), bg: Layout.WHITE });
+        }
       }
       var copy = {};
       for (var k in it) copy[k] = it[k];

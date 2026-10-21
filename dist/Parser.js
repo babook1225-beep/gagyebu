@@ -134,11 +134,47 @@ var CardParse = (function () {
     return tx;
   }
 
+  // 어느 카드사·은행 파일인지 (시트 칸 색깔용). 파일 이름 → 표 위쪽 안내 줄 → 전체 순서로 찾음.
+  var ORIGINS = [
+    [/현대카드|hyundai\s*card|hyundaicard/i, '현대카드'],
+    [/삼성카드|samsung\s*card|samsungcard/i, '삼성카드'],
+    [/KB국민카드|국민카드/i, '국민카드'],
+    [/신한카드/, '신한카드'], [/롯데카드/, '롯데카드'], [/하나카드/, '하나카드'], [/우리카드/, '우리카드'],
+    [/NH농협카드|농협카드/, '농협카드'], [/비씨카드|BC카드/i, 'BC카드']
+  ];
+  var BANK_ORIGINS = [
+    [/국민은행|KB|ＫＢ|스타뱅킹/i, '국민은행'], [/신한은행|신한/, '신한은행'], [/우리은행|우리/, '우리은행'],
+    [/하나은행|하나/, '하나은행'], [/농협|NH/i, '농협'], [/카카오뱅크|카카오/, '카카오뱅크'], [/토스뱅크|토스/, '토스뱅크']
+  ];
+  var ORIGIN_NAMES = ORIGINS.map(function (o) { return o[1]; }).concat(BANK_ORIGINS.map(function (o) { return o[1]; }));
+
+  function detectOrigin(texts, isBank, compactDates) {
+    var list = isBank ? BANK_ORIGINS : ORIGINS;
+    for (var t = 0; t < texts.length; t++) {
+      for (var i = 0; i < list.length; i++) if (list[i][0].test(texts[t])) return list[i][1];
+    }
+    if (!isBank && compactDates) return '삼성카드';   // 삼성카드만 20260901 형식 날짜를 씀
+    return isBank ? '은행' : '카드';
+  }
+
   /** All transactions in a card file (every sheet that has a transaction table). */
-  function parseFile(XLSX, buffer) {
-    var sheets = readSheets(XLSX, buffer);
+  function parseFile(XLSX, buffer, fileName) {
+    var info = {};
+    var sheets = readSheets(XLSX, buffer, info);
     var tx = [];
-    sheets.forEach(function (rows) { tx = tx.concat(parseRows(rows)); });
+    var top = [], all = [];
+    sheets.forEach(function (rows) {
+      tx = tx.concat(parseRows(rows));
+      var h = findHeader(rows);
+      rows.forEach(function (r, i) { (i <= h.row ? top : all).push((r || []).map(cellText).join(' ')); });
+    });
+    var isBank = tx.some(function (t) { return t.bank; });
+    var compact = sheets.some(function (rows) {
+      var h = findHeader(rows);
+      return rows.slice(h.row + 1, h.row + 6).some(function (r) { return COMPACT_DATE_RE.test(cellText((r || [])[h.col.date])); });
+    });
+    var origin = detectOrigin([fileName || '', (info.sheetNames || []).join(' ') + ' ' + top.join(' '), all.join(' ')], isBank, compact);
+    tx.forEach(function (t) { t.origin = origin; });
     if (!sheets.length) throw new Error('내역 표를 찾지 못했어요 (날짜·가맹점(받는분)·금액 칸이 필요해요)');
     tx.sort(function (a, b) { return (a.y - b.y) || (a.m - b.m) || (a.d - b.d); });
     return markCancelled(tx.filter(function (t) { return !t.bank; })).concat(tx.filter(function (t) { return t.bank; }))
@@ -191,7 +227,7 @@ var CardParse = (function () {
 
   // Many Korean card sites hand out "xls" files that are really HTML (sometimes EUC-KR, and
   // with sloppy tags like "</td   >" that trip SheetJS). Decode + tidy them first.
-  function readSheets(XLSX, buffer) {
+  function readSheets(XLSX, buffer, info) {
     var bytes = new Uint8Array(buffer);
     var head = '';
     for (var i = 0; i < Math.min(bytes.length, 2048); i++) head += String.fromCharCode(bytes[i]);
@@ -212,6 +248,7 @@ var CardParse = (function () {
     }
     // Every sheet that has a recognisable transaction table (일시불 / 할부 탭 등).
     var found = [];
+    if (info) info.sheetNames = wb.SheetNames;
     for (var s = 0; s < wb.SheetNames.length; s++) {
       var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]],
         { header: 1, raw: true, defval: '' });
@@ -225,7 +262,7 @@ var CardParse = (function () {
     return all.length ? all[0] : [];
   }
 
-  return { parseFile: parseFile, readRows: readRows, parseRows: parseRows, suggest: suggest, normalizeMerchant: normalizeMerchant,
+  return { parseFile: parseFile, ORIGIN_NAMES: ORIGIN_NAMES, detectOrigin: detectOrigin, readRows: readRows, parseRows: parseRows, suggest: suggest, normalizeMerchant: normalizeMerchant,
            parseDate: parseDate, toNumber: toNumber };
 })();
 if (typeof module !== 'undefined') module.exports = CardParse;

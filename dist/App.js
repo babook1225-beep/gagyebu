@@ -50,7 +50,8 @@ function readGrid_(sh, income) {
     cats: range.getDisplayValues(),
     vals: range.getValues(),
     forms: range.getFormulas(),
-    notes: range.getNotes()
+    notes: range.getNotes(),
+    bgs: range.getBackgrounds()
   };
 }
 
@@ -133,7 +134,9 @@ function commitPart_(sh, grid, list, summary) {
       var plan = Plan.planWrites(grid, adds);
       upd.writes.concat(plan.writes).forEach(function (w) {
         var cell = sh.getRange(w.row, w.col);
-        if ('note' in w) cell.setNote(w.note); else cell.setValue(w.value);
+        if ('note' in w) cell.setNote(w.note);
+        else if ('bg' in w) cell.setBackground(w.bg);
+        else cell.setValue(w.value);
       });
       var movedKeys = {};
       upd.moved.forEach(function (it) { movedKeys[it.key] = true; });
