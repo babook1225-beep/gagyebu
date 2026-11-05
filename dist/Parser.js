@@ -138,7 +138,7 @@ var CardParse = (function () {
   var ORIGINS = [
     [/현대카드|hyundai\s*card|hyundaicard/i, '현대카드'],
     [/삼성카드|samsung\s*card|samsungcard/i, '삼성카드'],
-    [/KB국민카드|국민카드/i, '국민카드'],
+    [/KB국민카드|국민카드|KB국민\s*\S*카드|kbcard/i, '국민카드'],
     [/신한카드/, '신한카드'], [/롯데카드/, '롯데카드'], [/하나카드/, '하나카드'], [/우리카드/, '우리카드'],
     [/NH농협카드|농협카드/, '농협카드'], [/비씨카드|BC카드/i, 'BC카드']
   ];
@@ -157,10 +157,83 @@ var CardParse = (function () {
     return isBank ? '은행' : '카드';
   }
 
+  // ---- PDF 명세서 ----
+  // pages: [[{str, x, y, w, h}, ...], ...] (pdf.js getTextContent 결과, y는 아래에서 위로 커짐).
+  // 글자 조각을 같은 높이끼리 한 줄로 묶고, 머리줄(이용일·가맹점·이용금액) 칸 위치에 맞춰
+  // 엑셀처럼 칸으로 나눈 표로 만든다. 머리줄이 없는 다음 쪽은 앞쪽 머리줄 위치를 그대로 씀.
+  function pdfLines(items) {
+    var list = items.filter(function (it) { return cellText(it.str); })
+      .sort(function (a, b) { return (b.y - a.y) || (a.x - b.x); });
+    var lines = [];
+    list.forEach(function (it) {
+      var tol = Math.max(2, (it.h || 8) * 0.4);
+      var line = null;
+      for (var i = lines.length - 1; i >= 0 && i >= lines.length - 3; i--) {
+        if (Math.abs(lines[i].y - it.y) <= tol) { line = lines[i]; break; }
+      }
+      if (!line) { line = { y: it.y, items: [] }; lines.push(line); }
+      line.items.push(it);
+    });
+    lines.forEach(function (l) { l.items.sort(function (a, b) { return a.x - b.x; }); });
+    return lines;
+  }
+
+  function pdfToSheets(pages) {
+    var sheets = [], cols = null, headerRow = null;
+    pages.forEach(function (items) {
+      var lines = pdfLines(items), rows = [], start = 0;
+      for (var i = 0; i < lines.length; i++) {
+        var texts = lines[i].items.map(function (it) { return cellText(it.str); });
+        if (findHeader([texts])) {
+          headerRow = texts;
+          cols = lines[i].items.map(function (it) { return [it.x, it.x + (it.w || 0)]; });
+          start = i + 1;
+          break;
+        }
+      }
+      if (!cols) return;
+      rows.push(headerRow);
+      for (var j = start; j < lines.length; j++) {
+        var row = cols.map(function () { return ''; });
+        lines[j].items.forEach(function (it) {
+          // 머리줄 글자와 가장 많이 겹치는 칸, 안 겹치면 가장 가까운 칸 (금액은 오른쪽 정렬이라 가운데로 재면 틀림)
+          var a = it.x, b = it.x + (it.w || 0), best = 0, bestScore = -Infinity;
+          for (var k = 0; k < cols.length; k++) {
+            var ov = Math.min(b, cols[k][1]) - Math.max(a, cols[k][0]);
+            if (ov > bestScore) { bestScore = ov; best = k; }
+          }
+          row[best] = row[best] ? row[best] + ' ' + cellText(it.str) : cellText(it.str);
+        });
+        rows.push(row);
+      }
+      sheets.push(rows);
+    });
+    return sheets;
+  }
+
+  /** PDF 명세서의 내역 (pages는 pdfToSheets와 같음). */
+  function parsePdfPages(pages, fileName) {
+    var sheets = pdfToSheets(pages);
+    if (!sheets.length) throw new Error('PDF에서 내역 표를 찾지 못했어요 (이용일·가맹점·금액 칸이 필요해요)');
+    var text = pages.map(function (items) { return items.map(function (it) { return it.str; }).join(' '); }).join(' ');
+    return parseSheets(sheets, fileName, { sheetNames: [text] });
+  }
+
+  function isPdf(buffer) {
+    var b = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 1024));
+    for (var i = 0; i + 4 < b.length; i++) {
+      if (b[i] === 0x25 && b[i + 1] === 0x50 && b[i + 2] === 0x44 && b[i + 3] === 0x46) return true;  // %PDF
+    }
+    return false;
+  }
+
   /** All transactions in a card file (every sheet that has a transaction table). */
   function parseFile(XLSX, buffer, fileName) {
     var info = {};
-    var sheets = readSheets(XLSX, buffer, info);
+    return parseSheets(readSheets(XLSX, buffer, info), fileName, info);
+  }
+
+  function parseSheets(sheets, fileName, info) {
     var tx = [];
     var top = [], all = [];
     sheets.forEach(function (rows) {
@@ -187,7 +260,7 @@ var CardParse = (function () {
     [/택시|지하철|버스|하이패스|도로|고속|대교|주유|충전소|철도|코레일|SRT|에어|항공|주차|파킹|카카오T|티머니/i, '교통비'],
     [/의원|병원|약국|의학과|치과|한의원|상담센터|클리닉|메디/, '병원비'],
     [/커피|카페|스타벅스|메가엠지씨|컴포즈|할리스|이디야|투썸|버거|맥도날드|롯데리아|치킨|피자|식당|마트|하나로|씨유|CU|GS25|세븐일레븐|이마트24|편의점|우아한형제들|배달|요기요|쿠팡이츠|아이스크림|베이커리|빵/i, '식비'],
-    [/SKT|KT|LG\s*U|통신|지방세|세금|국세|관리비|가스|전기|수도|헤어|미용/i, '생활비'],
+    [/SKT|KT|LG\s*U|텔레콤|브로드밴드|유플러스|통신|지방세|세금|국세|관리비|가스|전기|수도|헤어|미용/i, '생활비'],
     [/메가박스|CGV|롯데시네마/i, '데이트'],
     [/손해|손보|화재|생명|라이나|AIA|메트라이프|^KB손|^DB손|^미래\d|보험/i, '생활비'],
     [/모임|계비|회비/, '계비'],
@@ -262,7 +335,7 @@ var CardParse = (function () {
     return all.length ? all[0] : [];
   }
 
-  return { parseFile: parseFile, ORIGIN_NAMES: ORIGIN_NAMES, detectOrigin: detectOrigin, readRows: readRows, parseRows: parseRows, suggest: suggest, normalizeMerchant: normalizeMerchant,
+  return { parseFile: parseFile, parsePdfPages: parsePdfPages, pdfToSheets: pdfToSheets, isPdf: isPdf, ORIGIN_NAMES: ORIGIN_NAMES, detectOrigin: detectOrigin, readRows: readRows, parseRows: parseRows, suggest: suggest, normalizeMerchant: normalizeMerchant,
            parseDate: parseDate, toNumber: toNumber };
 })();
 if (typeof module !== 'undefined') module.exports = CardParse;
