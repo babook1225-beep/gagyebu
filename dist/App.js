@@ -29,10 +29,40 @@ function saveLearned_(map, key) {
   PropertiesService.getDocumentProperties().setProperty(key || LEARNED_KEY, JSON.stringify(map));
 }
 
+function monthTabs_(ss) {
+  return ss.getSheets().map(function (s) { return s.getName(); })
+    .filter(function (n) { return /^\d{4}\.\d{2}$/.test(n); }).sort();
+}
+
+/**
+ * 월 탭이 없으면 바로 앞 달 탭(없으면 가장 가까운 탭)을 복사해서 만들고 입력 칸만 비움.
+ * 적요 목록·합계 수식·월통계·왼쪽 계좌 표는 그대로 따라옴.
+ */
+function createMonthTab_(ss, tab) {
+  var have = ss.getSheetByName(tab);
+  if (have) return have;
+  var tabs = monthTabs_(ss);
+  if (!tabs.length) return null;
+  var before = tabs.filter(function (n) { return n < tab; });
+  var srcName = before.length ? before[before.length - 1] : tabs[0];
+  var src = ss.getSheetByName(srcName);
+  var sh = src.copyTo(ss).setName(tab);
+  // 자리: 앞 달 탭 바로 뒤 (앞 달이 없으면 가장 이른 탭 바로 앞)
+  ss.setActiveSheet(sh);
+  ss.moveActiveSheet(before.length ? src.getIndex() + 1 : src.getIndex());
+  var cols = Layout.LAST_COL - Layout.FIRST_COL + 1;
+  [[Layout.INC_FIRST_ROW, Layout.INC_LAST_ROW], [Layout.EXP_FIRST_ROW, Layout.EXP_LAST_ROW]].forEach(function (r) {
+    var rg = sh.getRange(r[0], Layout.FIRST_COL, r[1] - r[0] + 1, cols);
+    rg.clearContent();
+    rg.clearNote();
+    rg.setBackground(null);
+  });
+  return sh;
+}
+
 /** 가장 최근 월 탭의 적요 목록 (BS14:BS28). */
 function getCategories_(ss, range) {
-  var tabs = ss.getSheets().map(function (s) { return s.getName(); })
-    .filter(function (n) { return /^\d{4}\.\d{2}$/.test(n); }).sort();
+  var tabs = monthTabs_(ss);
   if (!tabs.length) return [];
   var sh = ss.getSheetByName(tabs[tabs.length - 1]);
   return sh.getRange(range || Layout.CAT_RANGE).getDisplayValues()
@@ -70,11 +100,13 @@ function checkItems(items) {
   var ss = ss_();
   var byTab = groupByTab_(items);
   var out = [];
+  var canCreate = monthTabs_(ss).length > 0;
   Object.keys(byTab).forEach(function (tab) {
     var sh = ss.getSheetByName(tab);
     var list = byTab[tab];
     if (!sh) {
-      list.forEach(function (it) { out.push({ key: it.key, tab: tab, tabMissing: true, dup: false }); });
+      // 없는 달은 넣을 때 앞 달 탭을 복사해서 만듦
+      list.forEach(function (it) { out.push({ key: it.key, tab: tab, tabMissing: true, canCreate: canCreate, dup: false }); });
       return;
     }
     [false, true].forEach(function (inc) {
@@ -99,10 +131,14 @@ function commitItems(items, skipped) {
   try {
     var ss = ss_();
     var byTab = groupByTab_(items);
-    var summary = { written: 0, merged: 0, updated: 0, moved: 0, same: 0, full: [], missingTab: [] };
+    var summary = { written: 0, merged: 0, updated: 0, moved: 0, same: 0, full: [], missingTab: [], createdTabs: [] };
     Object.keys(byTab).sort().forEach(function (tab) {
       var sh = ss.getSheetByName(tab);
       var list = byTab[tab];
+      if (!sh) {
+        sh = createMonthTab_(ss, tab);
+        if (sh) summary.createdTabs.push(tab);
+      }
       if (!sh) {
         list.forEach(function (it) { summary.missingTab.push(it.key); });
         return;

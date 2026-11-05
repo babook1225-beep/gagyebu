@@ -116,7 +116,7 @@
       <thead><tr><th style="width:36px"><input type="checkbox" id="all" checked title="전체 선택"></th><th>날짜</th><th>사용처 · 받는분</th><th style="text-align:right">금액</th><th>적요</th><th>메모</th><th>상태</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div class="hint">메모는 금액 칸의 메모로 들어가고, 같은 적요에 더해질 땐 기존 메모 뒤에 “+메모”로 붙어요. 적요는 한 줄만 고르면 같은 가맹점의 빈칸도 같이 채워지고, 메모는 고친 줄에만 들어가요. 넣기 싫은 줄은 체크를 해제하세요. 시트 칸은 위에서 고른 곳의 색으로 칠해져요(현대카드 파랑, 삼성카드 초록, 국민카드 주황, 국민은행 노랑, 여러 곳이 한 칸에 섞이면 회색). 은행 내역은 카드대금·저축·대출 상환·사람에게 보낸 이체와 입금을 기본으로 빼 두고, 체크를 해제한 받는분은 다음에도 빼 둬요. 입금은 수입 칸(2–3행)에 들어가요. “이미 있음”은 시트에 같은 금액이 ±2일 안에 이미 있다는 뜻이고, 체크해 두면 새로 넣지 않고 그 항목의 적요·메모를 고쳐요. 적요를 바꾸면 그 금액이 원래 칸에서 빠져 새 적요 칸으로 옮겨가요.</div>
+    <div class="hint">메모는 금액 칸의 메모로 들어가고, 같은 적요에 더해질 땐 기존 메모 뒤에 “+메모”로 붙어요. 적요는 한 줄만 고르면 같은 가맹점의 빈칸도 같이 채워지고, 메모는 고친 줄에만 들어가요. 넣기 싫은 줄은 체크를 해제하세요. 시트 칸은 위에서 고른 곳의 색으로 칠해져요(현대카드 파랑, 삼성카드 초록, 국민카드 주황, 국민은행 노랑, 여러 곳이 한 칸에 섞이면 회색). 은행 내역은 카드대금·저축·대출 상환·사람에게 보낸 이체와 입금을 기본으로 빼 두고, 체크를 해제한 받는분은 다음에도 빼 둬요. 입금은 수입 칸(2–3행)에 들어가요. 월 탭이 없으면 넣을 때 앞 달 탭을 복사해서 새로 만들어요. “이미 있음”은 시트에 같은 금액이 ±2일 안에 이미 있다는 뜻이고, 체크해 두면 새로 넣지 않고 그 항목의 적요·메모를 고쳐요. 적요를 바꾸면 그 금액이 원래 칸에서 빠져 새 적요 칸으로 옮겨가요.</div>
   </div>
 
   <div id="resultArea" class="result hidden"></div>
@@ -606,7 +606,8 @@ function loadFile(file) {
     checks.forEach(function (c) {
       var t = state.items[c.key];
       t.tab = c.tab;
-      if (c.tabMissing) { t.status = 'notab'; t.checked = false; }
+      t.newTab = !!(c.tabMissing && c.canCreate);
+      if (c.tabMissing && !c.canCreate) { t.status = 'notab'; t.checked = false; }
       else if (c.dup) {
         t.status = 'dup'; t.dupDay = c.dupDay; t.dupCount = c.dupCount;
         if (t.bank && t.flag && t.flag !== 'skip') t.checked = true;   // 이미 적어 둔 거면 그대로 수정 대상
@@ -665,7 +666,8 @@ function render() {
 function badge(t) {
   switch (t.status) {
     case 'new': return t.income && !t.checked ? '<span class="badge b-wait">수입 · 뺌</span>'
-      : '<span class="badge b-new">' + (t.income ? '수입 · ' : '') + '새로 넣기</span>';
+      : '<span class="badge b-new"' + (t.newTab ? ' title="넣을 때 ' + esc(t.tab) + ' 탭을 앞 달 탭 모양 그대로 새로 만들어요"' : '') + '>' +
+        (t.income ? '수입 · ' : '') + '새로 넣기' + (t.newTab ? ' · 새 ' + esc(t.tab) + ' 탭' : '') + '</span>';
     case 'flag': return '<span class="badge b-skip">' + ({
         cardbill: '카드대금', saving: '저축·적금', loan: '대출 상환', transfer: (t.income ? '받은 이체' : '보낸 이체'), skip: '지난번에 뺌'
       }[t.flag] || '확인') + (t.checked ? ' · 넣기' : ' · 뺌') + '</span>';
@@ -770,6 +772,7 @@ $('commit').addEventListener('click', function () {
   }).map(function (t) { return t.merchant; })]).then(function (r) {
     var lines = [];
     lines.push('<b>다 넣었어요.</b>');
+    if (r.createdTabs && r.createdTabs.length) lines.push('새로 만든 탭: ' + r.createdTabs.map(esc).join(', ') + ' (앞 달 탭을 복사하고 입력 칸만 비웠어요. 왼쪽 계좌·현금 표는 앞 달 값 그대로라 확인해 주세요)');
     lines.push('새 줄 ' + r.written + '건, 같은 적요에 더한 것 ' + r.merged + '건');
     if (r.updated || r.moved || r.same) lines.push('이미 있던 것: 메모 수정 ' + r.updated + '건, 적요 옮김 ' + r.moved + '건, 바뀐 것 없음 ' + r.same + '건');
     if (r.full.length) lines.push('<span style="color:var(--bad)">그날 빈 줄이 없어서 못 넣은 것 ' + r.full.length + '건: ' +
